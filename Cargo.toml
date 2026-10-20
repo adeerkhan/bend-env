@@ -1,0 +1,28 @@
+[package]
+name = "bendenv"
+version = "0.1.0"
+edition = "2024"
+description = "A project and environment manager for Bend 2: a manifest, a lockfile and a pinned package environment, over BendHub."
+license = "MIT"
+repository = "https://github.com/adeerkhan/bend-env"
+
+[lib]
+name = "bendenv"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bendenv"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.9"
+ureq = { version = "3", features = ["json"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
