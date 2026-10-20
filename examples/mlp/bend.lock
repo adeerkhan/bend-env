@@ -5,7 +5,10 @@ name = "bend-ml-autograd"
 version = "0.1.1.0"
 hash = "0x0ed882696c6c048c64c66242a999a426"
 source = "hub"
-dependencies = ["bend-ml-nat-lemmas@0.1.0.0", "bend-ml-tensor@0.1.0.0"]
+dependencies = [
+    "bend-ml-nat-lemmas@0.1.0.0",
+    "bend-ml-tensor@0.1.0.0",
+]
 
 [[package.files]]
 sha = "6ef84dd63aeee1961133c6d77bf2ce28a2a766a0d67e31eb7cf299bd020122a8"

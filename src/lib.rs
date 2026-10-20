@@ -10,6 +10,7 @@ pub mod env;
 pub mod hub;
 pub mod lock;
 pub mod manifest;
+pub mod project;
 pub mod publish;
 pub mod resolve;
 pub mod scan;

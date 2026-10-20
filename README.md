@@ -51,10 +51,15 @@ environment variable.
 | Command | What it does |
 |---|---|
 | `bendenv init [name]` | write a manifest |
+| `bendenv init --lib [name]` | write a manifest for a package to publish, with a LICENSE |
+| `bendenv init --workspace [name]` | write a manifest for a workspace of packages |
 | `bendenv add <name>[@constraint]` | add a dependency, lock and sync |
+| `bendenv add --dev <name>` | add a development dependency |
 | `bendenv remove <name>` | drop a dependency, lock and sync |
 | `bendenv lock` | resolve the manifest into `bend.lock` |
-| `bendenv sync` | materialize `bend.lock` into `.bend/env` |
+| `bendenv lock --check` | say whether the lock is current |
+| `bendenv sync` | resolve and materialize `bend.lock` into `.bend/env` |
+| `bendenv sync --locked` | materialize the lock as it is, without resolving |
 | `bendenv list` | the packages the project resolves to |
 | `bendenv tree` | the same, as a tree |
 | `bendenv why <name>` | why a package is in the lock |
@@ -66,6 +71,37 @@ environment variable.
 | `bendenv cache dir` | where the global cache lives |
 | `bendenv cache size` | how much the global cache holds |
 | `bendenv purge` | delete the environment |
+
+## Workspaces
+
+A monorepo of packages is a workspace: a root manifest that names its
+members, one lockfile for all of them, and one environment they share.
+
+```toml
+# bend.toml, at the root
+[project]
+name = "my-ml"
+
+[workspace]
+members = ["packages/*"]
+```
+
+```toml
+# packages/preprocess/bend.toml
+[project]
+name = "mlbend-preprocess"
+version = "0.1.0.0"
+
+[dependencies]
+bend-ml-nat-lemmas = "0.1.1.0"
+bend-ml-tensor = "0.1.0.0"
+```
+
+`bendenv add` run inside a member writes that member's manifest and
+re-locks the whole workspace; the lock and the environment live at the
+root, and every member reads them. The lock holds one version of each
+package for the whole workspace, so two members that want the same
+dependency at different versions are a conflict, and the tool says so.
 
 ## Why there is no conflict resolution
 
@@ -136,16 +172,13 @@ number. `bendenv check` reads the lock alone, so it needs no network.
   in the lock instead of only in the hub; that is a change to the
   compiler, and it belongs upstream in `bendlang/bend`, not here. Until
   then, `bendenv add` prints the exact import line to paste.
-- **Workspaces.** A monorepo of packages with one lockfile, the way uv
-  has them, is the next thing: `bend-ml` and `MLBend` are both monorepos
-  of packages that depend on each other.
 - **A registry of the project's own packages.** A project that wants to
   publish a library it depends on still uses `bend --publish` directly.
 
 ## The checks
 
 ```console
-cargo test          # 35 tests: the constraints and the files offline, the hub online
+cargo test          # 41 tests: the constraints and the files offline, the hub online
 cargo clippy        # the lints
 cargo fmt --check   # the format
 ```

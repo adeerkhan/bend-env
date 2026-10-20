@@ -20,6 +20,18 @@ pub struct Project {
     pub requires: Option<String>,
 }
 
+/// The workspace a root manifest names: the members it holds and the
+/// dependencies they share.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Workspace {
+    /// the member patterns, "packages/*" and the like
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// the dependencies the members share
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub project: Project,
@@ -31,6 +43,9 @@ pub struct Manifest {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub dev_dependencies: BTreeMap<String, String>,
+    /// the members of a workspace, when this manifest is a workspace root
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Workspace>,
 }
 
 impl Manifest {
@@ -44,7 +59,17 @@ impl Manifest {
             },
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
+            workspace: None,
         }
+    }
+
+    /// as_workspace turns a manifest into a workspace root with the
+    /// members it names.
+    pub fn as_workspace(&mut self, members: Vec<String>) {
+        self.workspace = Some(Workspace {
+            members,
+            dependencies: BTreeMap::new(),
+        });
     }
 
     /// read parses a manifest file.

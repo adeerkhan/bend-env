@@ -4,19 +4,25 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bendenv::{cache, env, hub, lock, manifest, publish, resolve, version};
+use bendenv::{cache, env, hub, lock, manifest, project, publish, resolve, version};
 use lock::{LOCK_VERSION, Lock};
 use manifest::Manifest;
+use project::Project;
 use resolve::Root;
 
 const USAGE: &str = "\
 bendenv: a project and environment manager for Bend 2
 
   bendenv init [name]             write a manifest (bend.toml)
+  bendenv init --lib [name]       write a manifest for a package to publish
+  bendenv init --workspace [name] write a manifest for a workspace of packages
   bendenv add <name>[@constraint] add a dependency, lock and sync
+  bendenv add --dev <name>        add a development dependency
   bendenv remove <name>           drop a dependency, lock and sync
   bendenv lock                    resolve the manifest into bend.lock
+  bendenv lock --check            say whether the lock is current
   bendenv sync                    materialize bend.lock into .bend/env
+  bendenv sync --locked           sync without re-locking
   bendenv list                    the packages the project resolves to
   bendenv tree                    the same, as a tree
   bendenv why <name>              why a package is in the lock
@@ -45,7 +51,7 @@ fn dispatch(argv: &[String]) -> Result<(), String> {
         "init" => init(rest),
         "add" => add(rest),
         "remove" => remove(rest),
-        "lock" => lock_only(rest),
+        "lock" => lock_cmd(rest),
         "sync" => sync_only(rest),
         "list" => list(rest, false),
         "tree" => list(rest, true),
@@ -64,28 +70,11 @@ fn dispatch(argv: &[String]) -> Result<(), String> {
     }
 }
 
-/// project finds the root of the project and its manifest.
-struct Project {
-    root: PathBuf,
-    file: PathBuf,
-    man: Manifest,
-}
-
-fn project() -> Result<Project, String> {
+/// open reads the project the working directory belongs to.
+fn open() -> Result<Project, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the working directory: {e}"))?;
-    let file = manifest::find(&cwd).ok_or_else(|| {
-        format!(
-            "no {} here or above; run `bendenv init` first",
-            manifest::MANIFEST_NAME
-        )
-    })?;
-    let man = Manifest::read(&file)?;
-    let root = file
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "the manifest has no directory".to_string())?;
-    Ok(Project { root, file, man })
+    project::open(&cwd)
 }
 
 fn lock_file(root: &Path) -> PathBuf {
@@ -103,22 +92,64 @@ fn init(args: &[String]) -> Result<(), String> {
             manifest::MANIFEST_NAME
         ));
     }
-    let name = args.first().cloned().unwrap_or_else(|| {
-        cwd.file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default()
-    });
-    Manifest::new(&name).write(&file)?;
+    let lib = args.iter().any(|a| a == "--lib");
+    let workspace = args.iter().any(|a| a == "--workspace");
+    if lib && workspace {
+        return Err("a package or a workspace, not both".to_string());
+    }
+    let name = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| {
+            cwd.file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+
+    let mut man = Manifest::new(&name);
+    if lib {
+        man.project.description = Some(format!("{name}, a Bend package"));
+        write_license(&cwd)?;
+    }
+    if workspace {
+        man.as_workspace(vec!["packages/*".to_string()]);
+    }
+    man.write(&file)?;
     println!("wrote {} for {name}", manifest::MANIFEST_NAME);
-    println!("next: bendenv add <package>");
+    if lib {
+        println!("next: bendenv add <package>, then bendenv publish <name>@<version> <file>.bend");
+    } else if workspace {
+        println!("next: make packages/<name>/{}/", manifest::MANIFEST_NAME);
+    } else {
+        println!("next: bendenv add <package>");
+    }
     Ok(())
 }
 
+/// write_license puts a LICENSE beside a package, the way the hub wants
+/// one: it reads the license of the package it publishes.
+fn write_license(dir: &Path) -> Result<(), String> {
+    let at = dir.join("LICENSE");
+    if at.exists() {
+        return Ok(());
+    }
+    std::fs::write(
+        &at,
+        "MIT License\n\nCopyright (c) 2026\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+    )
+    .map_err(|e| format!("cannot write {}: {e}", at.display()))
+}
+
+/// add takes a dependency, locks and syncs.
 fn add(args: &[String]) -> Result<(), String> {
+    let dev = args.iter().any(|a| a == "--dev");
     let spec = args
-        .first()
+        .iter()
+        .find(|a| !a.starts_with("--"))
         .ok_or("a package to add: bendenv add <name>[@constraint]")?;
-    let p = project()?;
+    let p = open()?;
+    let (file, man) = p.nearest_manifest()?;
     let (name, constraint) = match spec.rfind('@') {
         Some(at) if at > 0 => (spec[..at].to_string(), spec[at + 1..].to_string()),
         _ => (spec.clone(), "*".to_string()),
@@ -127,25 +158,28 @@ fn add(args: &[String]) -> Result<(), String> {
         return Err(format!("a package name of a-z, 0-9 and -: {name}"));
     }
     version::Constraint::parse(&constraint)?;
-    let mut man = p.man.clone();
-    man.dependencies.insert(name.clone(), constraint.clone());
-    man.write(&p.file)?;
-    let l = resolve_roots(&man)?;
-    write_lock(&p, &l)?;
+
+    let mut man = man.clone();
+    if dev {
+        man.dev_dependencies
+            .insert(name.clone(), constraint.clone());
+    } else {
+        man.dependencies.insert(name.clone(), constraint.clone());
+    }
+    man.write(&file)?;
+
+    // read the project again: the manifest on disk is the new one
+    let p = open()?;
+    let l = resolve_project(&p)?;
+    l.write(&lock_file(&p.root))?;
     let report = env::sync(&env::env_path(&p.root), &l)?;
-    println!(
-        "added {name} {constraint} ({})",
-        l.find(&format!(
-            "{name}@{}",
-            l.packages
-                .iter()
-                .find(|x| x.name == name)
-                .map(|x| x.version.clone())
-                .unwrap_or_default()
-        ))
+    let got = l
+        .packages
+        .iter()
+        .find(|x| x.name == name)
         .map(|x| x.version.clone())
-        .unwrap_or_default()
-    );
+        .unwrap_or_default();
+    println!("added {name} {constraint} ({got})");
     println!(
         "locked {} packages, {} files fetched, {} installed",
         l.packages.len(),
@@ -159,39 +193,71 @@ fn add(args: &[String]) -> Result<(), String> {
         println!("  import {name}@{} /<entry>.bend as <Name>", pkg.version);
     }
     say_skew(&l);
+    say_workspace_skew(&p);
     Ok(())
 }
 
+/// remove drops a dependency, locks and syncs.
 fn remove(args: &[String]) -> Result<(), String> {
     let name = args
-        .first()
+        .iter()
+        .find(|a| !a.starts_with("--"))
         .ok_or("a package to remove: bendenv remove <name>")?;
-    let p = project()?;
-    if !p.man.dependencies.contains_key(name) {
-        return Err(format!("{} does not depend on {name}", p.man.project.name));
+    let p = open()?;
+    let (file, man) = p.nearest_manifest()?;
+    let mut man = man.clone();
+    if man.dependencies.remove(name).is_none() && man.dev_dependencies.remove(name).is_none() {
+        return Err(format!("{} does not depend on {name}", man.project.name));
     }
-    let mut man = p.man.clone();
-    man.dependencies.remove(name);
-    man.write(&p.file)?;
-    let l = resolve_roots(&man)?;
-    write_lock(&p, &l)?;
+    man.write(&file)?;
+    let p = open()?;
+    let l = resolve_project(&p)?;
+    l.write(&lock_file(&p.root))?;
     env::sync(&env::env_path(&p.root), &l)?;
     println!("removed {name}; locked {} packages", l.packages.len());
     Ok(())
 }
 
-fn lock_only(_args: &[String]) -> Result<(), String> {
-    let p = project()?;
-    let l = resolve_roots(&p.man)?;
-    write_lock(&p, &l)?;
-    println!("locked {} packages", l.packages.len());
-    say_skew(&l);
+/// lock_cmd resolves the manifest into the lockfile.
+fn lock_cmd(args: &[String]) -> Result<(), String> {
+    let p = open()?;
+    let want = resolve_project(&p)?;
+    let at = lock_file(&p.root);
+    if args.iter().any(|a| a == "--check") {
+        let have = Lock::read(&at)?;
+        let same = have.packages.len() == want.packages.len()
+            && have.packages.iter().all(|x| {
+                want.packages
+                    .iter()
+                    .any(|y| y.name == x.name && y.version == x.version && y.hash == x.hash)
+            });
+        if same {
+            println!("the lock is current");
+            return Ok(());
+        }
+        return Err("the lock is not current: run `bendenv lock`".to_string());
+    }
+    want.write(&at)?;
+    println!("locked {} packages", want.packages.len());
+    say_skew(&want);
+    say_workspace_skew(&p);
     Ok(())
 }
 
-fn sync_only(_args: &[String]) -> Result<(), String> {
-    let p = project()?;
-    let l = Lock::read(&lock_file(&p.root))?;
+fn sync_only(args: &[String]) -> Result<(), String> {
+    let p = open()?;
+    let at = lock_file(&p.root);
+    // --locked uses the lock as it is: no resolving, no network
+    let l = if args.iter().any(|a| a == "--locked") {
+        if !at.is_file() {
+            return Err("no bend.lock: run `bendenv lock`".to_string());
+        }
+        Lock::read(&at)?
+    } else {
+        let l = resolve_project(&p)?;
+        l.write(&at)?;
+        l
+    };
     let report = env::sync(&env::env_path(&p.root), &l)?;
     println!(
         "synced {} packages, {} files fetched, {} linked, {} already there",
@@ -204,8 +270,15 @@ fn sync_only(_args: &[String]) -> Result<(), String> {
 }
 
 fn list(_args: &[String], as_tree: bool) -> Result<(), String> {
-    let p = project()?;
-    let l = Lock::read(&lock_file(&p.root))?;
+    let p = open()?;
+    let l = read_lock_lenient(&p.root);
+    if p.is_workspace() {
+        println!("workspace {}", p.manifest.project.name);
+        for m in &p.members {
+            println!("  member {} at {}", m.name(), m.dir.display());
+        }
+        println!();
+    }
     if l.packages.is_empty() {
         println!("no packages; run `bendenv add <name>`");
         return Ok(());
@@ -224,6 +297,7 @@ fn list(_args: &[String], as_tree: bool) -> Result<(), String> {
             );
         }
         say_skew(&l);
+        say_workspace_skew(&p);
         return Ok(());
     }
 
@@ -232,7 +306,7 @@ fn list(_args: &[String], as_tree: bool) -> Result<(), String> {
         by_pinned.insert(format!("{}@{}", pkg.name, pkg.version), pkg);
     }
     let mut shown: Vec<String> = Vec::new();
-    let mut roots: Vec<String> = p.man.dependencies.keys().cloned().collect();
+    let mut roots: Vec<String> = p.roots().into_iter().map(|(n, _)| n).collect();
     roots.sort();
     for r in roots {
         let Some(pkg) = l.packages.iter().find(|x| x.name == r) else {
@@ -276,17 +350,16 @@ fn walk(
 
 fn why(args: &[String]) -> Result<(), String> {
     let name = args.first().ok_or("a package: bendenv why <name>")?;
-    let p = project()?;
+    let p = open()?;
     let l = Lock::read(&lock_file(&p.root))?;
     let mut by_pinned: BTreeMap<String, &lock::Locked> = BTreeMap::new();
     for pkg in &l.packages {
         by_pinned.insert(format!("{}@{}", pkg.name, pkg.version), pkg);
     }
     let mut roots: Vec<String> = p
-        .man
-        .dependencies
-        .keys()
-        .filter_map(|n| l.packages.iter().find(|x| &x.name == n))
+        .roots()
+        .into_iter()
+        .filter_map(|(n, _)| l.packages.iter().find(|x| x.name == n))
         .map(|x| format!("{}@{}", x.name, x.version))
         .collect();
     roots.sort();
@@ -330,7 +403,7 @@ fn path_to(
 }
 
 fn outdated(_args: &[String]) -> Result<(), String> {
-    let p = project()?;
+    let p = open()?;
     let l = Lock::read(&lock_file(&p.root))?;
     let mut any = false;
     let mut packages = l.packages.clone();
@@ -360,7 +433,7 @@ fn outdated(_args: &[String]) -> Result<(), String> {
 }
 
 fn check(_args: &[String]) -> Result<(), String> {
-    let p = project()?;
+    let p = open()?;
     let l = Lock::read(&lock_file(&p.root))?;
     let bad = env::check(&env::env_path(&p.root), &l);
     if bad.is_empty() {
@@ -385,7 +458,7 @@ fn run(args: &[String]) -> Result<(), String> {
     if cmd.is_empty() {
         return Err("a command to run: bendenv run -- bend main.bend".to_string());
     }
-    let p = project()?;
+    let p = open()?;
     let e = env::env_path(&p.root);
     if !e.is_dir() {
         return Err("no environment yet; run `bendenv sync`".to_string());
@@ -418,16 +491,23 @@ fn cache_cmd(args: &[String]) -> Result<(), String> {
             );
             Ok(())
         }
-        _ => Err("bendenv cache clean | bendenv cache dir".to_string()),
+        _ => Err("bendenv cache clean | bendenv cache dir | bendenv cache size".to_string()),
     }
 }
 
 fn purge(_args: &[String]) -> Result<(), String> {
-    let p = project()?;
+    let p = open()?;
     let e = env::env_path(&p.root);
     env::purge(&e)?;
     println!("removed {}", e.display());
     Ok(())
+}
+
+/// read_lock_lenient reads the lockfile, and treats a missing one as an
+/// empty lock: a project that has not been locked yet still has members
+/// to show.
+fn read_lock_lenient(root: &Path) -> Lock {
+    Lock::read(&lock_file(root)).unwrap_or_else(|_| Lock::empty())
 }
 
 /// say_skew prints the packages the closure holds at two versions.
@@ -444,9 +524,25 @@ fn say_skew(l: &Lock) {
     }
 }
 
-/// resolve_roots resolves the manifest's dependencies.
-fn resolve_roots(man: &Manifest) -> Result<Lock, String> {
-    let roots: Vec<Root> = man
+/// say_workspace_skew prints the dependencies two packages of a
+/// workspace want at different versions.
+fn say_workspace_skew(p: &Project) {
+    let bad = p.skew();
+    if bad.is_empty() {
+        return;
+    }
+    eprintln!();
+    eprintln!("two packages of the workspace want the same dependency at");
+    eprintln!("different versions. One lock holds one version of each:");
+    for (name, versions) in bad {
+        eprintln!("  {name}: {}", versions.join(", "));
+    }
+}
+
+/// resolve_project resolves the dependencies of every package of the
+/// project: the workspace's, or the lone package's.
+fn resolve_project(p: &Project) -> Result<Lock, String> {
+    let roots: Vec<Root> = p
         .roots()
         .into_iter()
         .map(|(name, constraint)| Root { name, constraint })
@@ -455,10 +551,6 @@ fn resolve_roots(man: &Manifest) -> Result<Lock, String> {
         return Ok(Lock::empty());
     }
     resolve::resolve(&roots)
-}
-
-fn write_lock(p: &Project, l: &Lock) -> Result<(), String> {
-    l.write(&lock_file(&p.root))
 }
 
 /// the lock version this tool writes, for the tests
