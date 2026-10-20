@@ -5,11 +5,21 @@
 //! environment is made of hard links into it. A second project that
 //! wants the same file downloads nothing, and an install writes no new
 //! bytes at all.
+//!
+//! Two kinds of thing live here, and the difference matters. What a
+//! package's hash names never changes — the files, the manifest, the
+//! imports those files carry — so it is cached for good. What a
+//! package's *name* names does change, because a new version can appear
+//! at any moment, so that is cached for a while and then asked again.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use crate::hub;
+
+/// How long a package's page is kept before it is asked for again.
+const PAGE_TTL: Duration = Duration::from_secs(300);
 
 /// cache_dir is where the store lives: $BEND_CACHE, or ~/.cache/bendenv.
 pub fn cache_dir() -> PathBuf {
@@ -60,6 +70,142 @@ pub fn fetch(hash: &str, path_in_package: &str, sha: &str) -> Result<(), String>
     put(sha, &text)
 }
 
+// The pages of the hub
+// ===================
+
+/// pages_dir holds the hub's answers that move: a package's page, with
+/// the time it was read.
+fn pages_dir() -> PathBuf {
+    cache_dir().join("pages")
+}
+
+/// page reads a cached page, if it is still fresh.
+fn page(name: &str) -> Option<String> {
+    let at = pages_dir().join(name);
+    let text = fs::read_to_string(&at).ok()?;
+    let (stamp, body) = text.split_once('\n')?;
+    let age = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?
+        .checked_sub(Duration::from_millis(stamp.parse().ok()?))
+        .unwrap_or_default();
+    if age > PAGE_TTL {
+        return None;
+    }
+    Some(body.to_string())
+}
+
+/// write_page caches a page with the time it was read.
+fn write_page(name: &str, body: &str) {
+    let dir = pages_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let at = dir.join(name);
+    let _ = fs::write(&at, format!("{now}\n{body}"));
+}
+
+/// info returns a package's page, from the cache when it is fresh and
+/// from the hub when it is not.
+pub fn info(name: &str) -> Result<hub::PkgInfo, String> {
+    if let Some(got) = page(&format!("name-{name}"))
+        .and_then(|text| serde_json::from_str::<hub::PkgInfo>(&text).ok())
+    {
+        return Ok(got);
+    }
+    let got = hub::info(name)?;
+    if let Ok(text) = serde_json::to_string(&got) {
+        write_page(&format!("name-{name}"), &text);
+    }
+    Ok(got)
+}
+
+/// hash_of returns the hash a pinned name and version carry, from the
+/// cache when the page is fresh and from the hub when it is not.
+pub fn hash_of(pinned: &str) -> Result<String, String> {
+    if let Some(text) = page(&format!("hash-{pinned}")) {
+        let got = text.trim().to_string();
+        if hub::valid_hash(&got) {
+            return Ok(got);
+        }
+    }
+    let got = hub::hash_of(pinned)?;
+    write_page(&format!("hash-{pinned}"), &got);
+    Ok(got)
+}
+
+// What a hash names
+// ================
+
+/// manifest returns the files of a package. A hash names the same files
+/// for ever, so this is cached for good.
+pub fn manifest(hash: &str) -> Result<Vec<hub::HubFile>, String> {
+    let at = cache_dir().join("manifests").join(hash);
+    if let Ok(text) = fs::read_to_string(&at) {
+        let mut out = Vec::new();
+        for line in text.lines() {
+            let Some((sha, path)) = line.split_once(' ') else {
+                continue;
+            };
+            out.push(hub::HubFile {
+                sha: sha.to_string(),
+                path: path.to_string(),
+            });
+        }
+        if !out.is_empty() {
+            return Ok(out);
+        }
+    }
+    let got = hub::manifest(hash)?;
+    let mut text = String::new();
+    for f in &got {
+        text.push_str(&f.sha);
+        text.push(' ');
+        text.push_str(&f.path);
+        text.push('\n');
+    }
+    let dir = cache_dir().join("manifests");
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(hash), text);
+    Ok(got)
+}
+
+/// deps returns the packages a package's sources import. A hash names
+/// the same sources for ever, so this is cached for good.
+pub fn deps(hash: &str) -> Result<Vec<String>, String> {
+    let at = cache_dir().join("deps").join(hash);
+    if let Ok(text) = fs::read_to_string(&at) {
+        let out: Vec<String> = text
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !out.is_empty() {
+            return Ok(out);
+        }
+    }
+    let files = manifest(hash)?;
+    let mut out: Vec<String> = Vec::new();
+    for f in files.iter().filter(|f| f.path.ends_with(".bend")) {
+        let text = hub::file(hash, &f.path, &f.sha)?;
+        for p in crate::scan::imports(&text) {
+            let dep = p.to_string();
+            if !out.contains(&dep) {
+                out.push(dep);
+            }
+        }
+    }
+    out.sort();
+    let dir = cache_dir().join("deps");
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(hash), out.join("\n"));
+    Ok(out)
+}
+
 /// clean empties the store.
 pub fn clean() -> Result<usize, String> {
     let dir = files_dir();
@@ -72,20 +218,34 @@ pub fn clean() -> Result<usize, String> {
         let _ = fs::remove_file(entry.path());
         n += 1;
     }
+    for sub in ["pages", "manifests", "deps"] {
+        let dir = cache_dir().join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let _ = fs::remove_file(entry.path());
+                n += 1;
+            }
+        }
+    }
     Ok(n)
 }
 
 /// size is how many bytes the store holds.
 pub fn size() -> u64 {
-    let dir = files_dir();
-    if !dir.is_dir() {
-        return 0;
-    }
     let mut n = 0;
-    if let Ok(entries) = fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                n += meta.len();
+    for sub in ["files", "pages", "manifests", "deps"] {
+        let dir = cache_dir().join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    n += meta.len();
+                }
             }
         }
     }

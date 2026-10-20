@@ -140,6 +140,29 @@ downloads nothing.
 A file system that will not link (two mounts, say) gets a copy instead,
 and the tool carries on.
 
+Two kinds of thing are cached, and the difference matters. What a
+package's *hash* names never changes — the files, the manifest, the
+imports those files carry — so it is cached for good. What a package's
+*name* names does change, because a new version can appear at any
+moment, so that is cached for five minutes and then asked again.
+
+### What it costs, measured
+
+From a machine 4,000 km from the hub, whose round trip is 410 ms:
+
+| | |
+|---|---|
+| the binary starts | 2 ms |
+| `bendenv sync --locked` (no network) | 8 ms |
+| `bendenv lock`, nothing cached | 8.3 s |
+| `bendenv lock`, the cache warm | 1.9 s |
+
+The cold number is the hub, not the tool: six requests, each paying its
+own TLS handshake over a 410 ms round trip. The warm number is two
+requests, for the two pages that move. The client asks each level of
+the dependency walk at once, so a chain of four dependencies is two
+round trips and not four.
+
 ## The skew
 
 Two versions of one package can sit in a closure side by side. They are

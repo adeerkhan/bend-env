@@ -37,7 +37,7 @@ pub fn valid_hash(hash: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct PkgVersion {
     pub version: String,
     pub hash: String,
@@ -45,7 +45,7 @@ pub struct PkgVersion {
     pub ts: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct PkgLatest {
     pub version: String,
     pub hash: String,
@@ -57,7 +57,7 @@ pub struct PkgLatest {
     pub entry: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct PkgInfo {
     pub name: String,
     #[serde(default)]
