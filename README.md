@@ -163,6 +163,26 @@ requests, for the two pages that move. The client asks each level of
 the dependency walk at once, so a chain of four dependencies is two
 round trips and not four.
 
+## The collisions
+
+A Bend type belongs to the package that declares it, so two packages
+that both declare `Mat` are two different `Mat`, and a program that
+passes one to the other does not compile. `bendenv` reports every type
+two packages of the closure declare:
+
+```
+two packages of the closure declare the same type. A Bend type
+belongs to the package that declares it, so they are two
+different types, and a program that mixes them does not compile:
+  G: bend-ml-autograd, bend-ml-tensor-array
+  Mat: bend-ml-tensor, bend-ml-tensor-array
+```
+
+The ecosystem's flat tensor library and its list-based one are such a
+pair, and so is the flat one and the autodiff that is written against
+the other. The lock carries the type names of every package, so the
+report needs no network.
+
 ## The skew
 
 Two versions of one package can sit in a closure side by side. They are
@@ -186,6 +206,23 @@ published in the package's manifest, on the way in and again by
 `bendenv check`. A published version never moves: the hash is the
 identity of the package, so a lockfile pins the bytes, not just the
 number. `bendenv check` reads the lock alone, so it needs no network.
+
+## The publish path
+
+`bendenv publish <name>@<version> <file.bend>` sends a package to the
+hub, and `bendenv hash <file.bend>` says what it would publish under,
+without publishing anything:
+
+```console
+$ bendenv hash bendtorch.bend
+bendtorch: 0x1689e5deb278c16abd3bd45eac101ef3
+196 files, 4361634 bytes
+```
+
+That hash is the one the hub holds for `bendtorch-core@0.1.0.0`, over
+the same 196 files: the file set, the paths, the digests and the hash
+are the compiler's, byte for byte. The hub's proof of work is mined
+over the cores, the way the compiler's own publisher does it.
 
 ## What it does not do yet
 

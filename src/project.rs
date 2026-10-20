@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 
 use crate::manifest::{MANIFEST_NAME, Manifest};
 
+/// the empty table, for a project that is not a workspace
+static EMPTY: std::sync::LazyLock<BTreeMap<String, String>> =
+    std::sync::LazyLock::new(BTreeMap::new);
+
 /// A member of a workspace: a package with its own manifest.
 #[derive(Clone, Debug)]
 pub struct Member {
@@ -58,26 +62,52 @@ impl Project {
         out
     }
 
+    /// shared are the dependencies the workspace declares for its
+    /// members: the workspace is the authority on their versions.
+    pub fn shared(&self) -> &BTreeMap<String, String> {
+        match &self.manifest.workspace {
+            Some(ws) => &ws.dependencies,
+            None => &EMPTY,
+        }
+    }
+
     /// roots are the dependencies to resolve: every package's, the
     /// direct ones first.
+    ///
+    /// A dependency the workspace also declares takes the workspace's
+    /// constraint: one lock holds one version of each package, so the
+    /// workspace has the last word.
     pub fn roots(&self) -> Vec<(String, String)> {
+        let shared = self.shared();
         let mut out: Vec<(String, String)> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
+        let take = |name: &String,
+                    constraint: &String,
+                    out: &mut Vec<(String, String)>,
+                    seen: &mut Vec<String>| {
+            if seen.contains(name) {
+                return;
+            }
+            seen.push(name.clone());
+            let want = shared
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| constraint.clone());
+            out.push((name.clone(), want));
+        };
         for (_, man) in self.packages() {
             for (name, constraint) in &man.dependencies {
-                if !seen.contains(name) {
-                    seen.push(name.clone());
-                    out.push((name.clone(), constraint.clone()));
-                }
+                take(name, constraint, &mut out, &mut seen);
             }
         }
         for (_, man) in self.packages() {
             for (name, constraint) in &man.dev_dependencies {
-                if !seen.contains(name) {
-                    seen.push(name.clone());
-                    out.push((name.clone(), constraint.clone()));
-                }
+                take(name, constraint, &mut out, &mut seen);
             }
+        }
+        // the workspace's own shared dependencies are the project's too
+        for (name, constraint) in shared {
+            take(name, constraint, &mut out, &mut seen);
         }
         out
     }

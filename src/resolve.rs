@@ -76,6 +76,11 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
             picks.par_iter().map(|p| cache::deps(&p.hash)).collect();
         let deps_of: Vec<Vec<String>> = deps_of.into_iter().collect::<Result<Vec<_>, _>>()?;
 
+        // the types each declares, for the same reason
+        let types_of: Vec<Result<Vec<String>, String>> =
+            picks.par_iter().map(|p| cache::types(&p.hash)).collect();
+        let types_of: Vec<Vec<String>> = types_of.into_iter().collect::<Result<Vec<_>, _>>()?;
+
         for (i, picked) in picks.iter().enumerate() {
             let pinned = format!("{}@{}", picked.name, picked.version);
             if out.contains_key(&pinned) {
@@ -98,6 +103,7 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
                             path: f.path.clone(),
                         })
                         .collect(),
+                    types: types_of[i].clone(),
                 },
             );
             for dep in deps {

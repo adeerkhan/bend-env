@@ -44,10 +44,17 @@ pub fn hash_of(files: &Files) -> String {
 /// pkg_files collects the files of a package: the entry file, the files
 /// it imports, the foreign code it names, and the LICENSE beside each.
 pub fn pkg_files(entry: &Path) -> Result<(Files, String), String> {
-    let dir = entry
-        .parent()
-        .ok_or_else(|| "the entry file has no directory".to_string())?
-        .to_path_buf();
+    // the directory the package's paths are relative to: the entry's,
+    // canonical, so that a file's name inside the package is the same
+    // whoever reads it
+    let parent = match entry.parent() {
+        Some(p) if p.as_os_str().is_empty() => Path::new("."),
+        Some(p) => p,
+        None => Path::new("."),
+    };
+    let dir = parent
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", parent.display()))?;
     let mut files: Files = BTreeMap::new();
     let mut stack = vec![entry.to_path_buf()];
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -73,10 +80,10 @@ pub fn pkg_files(entry: &Path) -> Result<(Files, String), String> {
             files.insert(name, text.replace('\u{feff}', ""));
         }
 
+        // an import is relative to the file that makes it
+        let here = real.parent().unwrap_or(&dir);
         for import in imports_of(&text) {
-            // a relative import, or a foreign effect: a .c or .js file
-            // beside the entry
-            let target = dir.join(&import);
+            let target = here.join(&import);
             if target.is_file() {
                 stack.push(target);
             }
@@ -128,6 +135,27 @@ fn imports_of(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// hash_cmd prints the hash a package would publish under, and how many
+/// files it would carry. It publishes nothing.
+pub fn hash_cmd(args: &[String]) -> Result<(), String> {
+    let file = args
+        .first()
+        .ok_or("the file to hash: bendenv hash <file.bend>")?;
+    let entry = Path::new(file);
+    if !entry.is_file() {
+        return Err(format!("no such file: {file}"));
+    }
+    let (files, name) = pkg_files(entry)?;
+    let bytes: usize = files.values().map(|t| t.len()).sum();
+    let hash = hash_of(&files);
+    println!("{name}: {hash}");
+    println!("{} files, {bytes} bytes", files.len());
+    for path in files.keys() {
+        println!("  {path}");
+    }
+    Ok(())
 }
 
 /// publish sends a package to the hub and names it.

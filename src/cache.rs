@@ -12,6 +12,7 @@
 //! package's *name* names does change, because a new version can appear
 //! at any moment, so that is cached for a while and then asked again.
 
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -189,9 +190,16 @@ pub fn deps(hash: &str) -> Result<Vec<String>, String> {
         }
     }
     let files = manifest(hash)?;
+    // the sources of a package, read at once: a package with two hundred
+    // files is two hundred round trips, and they do not have to be one
+    // after the other
+    let sources: Vec<Result<String, String>> = files
+        .par_iter()
+        .filter(|f| f.path.ends_with(".bend"))
+        .map(|f| hub::file(hash, &f.path, &f.sha))
+        .collect();
     let mut out: Vec<String> = Vec::new();
-    for f in files.iter().filter(|f| f.path.ends_with(".bend")) {
-        let text = hub::file(hash, &f.path, &f.sha)?;
+    for text in sources.into_iter().collect::<Result<Vec<_>, _>>()? {
         for p in crate::scan::imports(&text) {
             let dep = p.to_string();
             if !out.contains(&dep) {
@@ -201,6 +209,48 @@ pub fn deps(hash: &str) -> Result<Vec<String>, String> {
     }
     out.sort();
     let dir = cache_dir().join("deps");
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(hash), out.join("\n"));
+    Ok(out)
+}
+
+/// types returns the names of the types a package declares. A hash
+/// names the same sources for ever, so this is cached for good.
+pub fn types(hash: &str) -> Result<Vec<String>, String> {
+    let at = cache_dir().join("types").join(hash);
+    if let Ok(text) = fs::read_to_string(&at) {
+        let out: Vec<String> = text
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !out.is_empty() {
+            return Ok(out);
+        }
+    }
+    let files = manifest(hash)?;
+    let sources: Vec<Result<String, String>> = files
+        .par_iter()
+        .filter(|f| f.path.ends_with(".bend"))
+        .map(|f| hub::file(hash, &f.path, &f.sha))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for text in sources.into_iter().collect::<Result<Vec<_>, _>>()? {
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("type ") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                    .collect();
+                if !name.is_empty() && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    out.sort();
+    let dir = cache_dir().join("types");
     let _ = fs::create_dir_all(&dir);
     let _ = fs::write(dir.join(hash), out.join("\n"));
     Ok(out)
@@ -218,7 +268,7 @@ pub fn clean() -> Result<usize, String> {
         let _ = fs::remove_file(entry.path());
         n += 1;
     }
-    for sub in ["pages", "manifests", "deps"] {
+    for sub in ["pages", "manifests", "deps", "types"] {
         let dir = cache_dir().join(sub);
         if !dir.is_dir() {
             continue;
@@ -236,7 +286,7 @@ pub fn clean() -> Result<usize, String> {
 /// size is how many bytes the store holds.
 pub fn size() -> u64 {
     let mut n = 0;
-    for sub in ["files", "pages", "manifests", "deps"] {
+    for sub in ["files", "pages", "manifests", "deps", "types"] {
         let dir = cache_dir().join(sub);
         if !dir.is_dir() {
             continue;

@@ -6,6 +6,7 @@
 //! reproducible: a published version never moves, and the hash is checked
 //! against the bytes.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -35,6 +36,9 @@ pub struct Locked {
     /// the files of the package, so the lock is the whole of it
     #[serde(default)]
     pub files: Vec<LockedFile>,
+    /// the names of the types the package declares
+    #[serde(default)]
+    pub types: Vec<String>,
 }
 
 fn hub_source() -> String {
@@ -90,6 +94,30 @@ impl Lock {
         self.packages
             .iter()
             .find(|p| format!("{}@{}", p.name, p.version) == pinned)
+    }
+
+    /// collisions finds the type names two packages of the closure both
+    /// declare. A Bend type belongs to the package that declares it, so
+    /// two packages that declare `Mat` are two different `Mat`, and a
+    /// program that mixes them does not compile.
+    pub fn collisions(&self) -> Vec<(String, Vec<String>)> {
+        let mut by_type: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for pkg in &self.packages {
+            for t in &pkg.types {
+                let list = by_type.entry(t.clone()).or_default();
+                if !list.contains(&pkg.name) {
+                    list.push(pkg.name.clone());
+                }
+            }
+        }
+        by_type
+            .into_iter()
+            .filter(|(_, names)| names.len() > 1)
+            .map(|(name, mut names)| {
+                names.sort();
+                (name, names)
+            })
+            .collect()
     }
 
     /// skew finds the packages the closure holds at two versions. Two

@@ -30,6 +30,7 @@ bendenv: a project and environment manager for Bend 2
   bendenv check                   verify the environment against the lock
   bendenv run -- <cmd>...         run a command with the environment
   bendenv publish <name>@<version> publish a package to the hub
+  bendenv hash <file.bend>         the hash a package would publish under
   bendenv cache clean             empty the global cache
   bendenv cache dir               where the global cache lives
   bendenv cache size              how much the global cache holds
@@ -60,6 +61,7 @@ fn dispatch(argv: &[String]) -> Result<(), String> {
         "check" => check(rest),
         "run" => run(rest),
         "publish" => publish::publish(rest),
+        "hash" => publish::hash_cmd(rest),
         "cache" => cache_cmd(rest),
         "purge" => purge(rest),
         "" | "-h" | "--help" | "help" => {
@@ -193,6 +195,7 @@ fn add(args: &[String]) -> Result<(), String> {
         println!("  import {name}@{} /<entry>.bend as <Name>", pkg.version);
     }
     say_skew(&l);
+    say_collisions(&l);
     say_workspace_skew(&p);
     Ok(())
 }
@@ -240,6 +243,7 @@ fn lock_cmd(args: &[String]) -> Result<(), String> {
     want.write(&at)?;
     println!("locked {} packages", want.packages.len());
     say_skew(&want);
+    say_collisions(&want);
     say_workspace_skew(&p);
     Ok(())
 }
@@ -297,6 +301,7 @@ fn list(_args: &[String], as_tree: bool) -> Result<(), String> {
             );
         }
         say_skew(&l);
+        say_collisions(&l);
         say_workspace_skew(&p);
         return Ok(());
     }
@@ -508,6 +513,24 @@ fn purge(_args: &[String]) -> Result<(), String> {
 /// to show.
 fn read_lock_lenient(root: &Path) -> Lock {
     Lock::read(&lock_file(root)).unwrap_or_else(|_| Lock::empty())
+}
+
+/// say_collisions prints the type names two packages of the closure
+/// both declare. A Bend type belongs to the package that declares it,
+/// so two packages that declare `Mat` are two different `Mat`, and a
+/// program that mixes them does not compile.
+fn say_collisions(l: &Lock) {
+    let bad = l.collisions();
+    if bad.is_empty() {
+        return;
+    }
+    eprintln!();
+    eprintln!("two packages of the closure declare the same type. A Bend type");
+    eprintln!("belongs to the package that declares it, so they are two");
+    eprintln!("different types, and a program that mixes them does not compile:");
+    for (name, packages) in bad {
+        eprintln!("  {name}: {}", packages.join(", "));
+    }
 }
 
 /// say_skew prints the packages the closure holds at two versions.
