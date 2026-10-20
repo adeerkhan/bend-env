@@ -1,0 +1,17 @@
+{
+  "name": "bend-env",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A project and environment manager for Bend 2: a manifest, a lockfile and a pinned package environment, over BendHub.",
+  "bin": {
+    "bendenv": "./src/cli.ts"
+  },
+  "scripts": {
+    "check": "bun test",
+    "lint": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  }
+}
