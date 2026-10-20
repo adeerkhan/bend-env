@@ -107,3 +107,18 @@ describe("the environment", () => {
     expect(again.reused).toBeGreaterThan(0);
   }, TIMEOUT);
 });
+
+describe("the skew of the closure", () => {
+  test("two versions of one package are found", async () => {
+    const l = await resolve([
+      { name: "bend-ml-tensor", constraint: "0.1.2.0" },
+      { name: "bend-ml-autograd", constraint: "0.1.1.0" },
+    ]);
+    const names = new Map<string, string[]>();
+    for (const pkg of l.package) {
+      names.set(pkg.name, [...(names.get(pkg.name) ?? []), pkg.version]);
+    }
+    expect(names.get("bend-ml-tensor")?.sort()).toEqual(["0.1.0.0", "0.1.2.0"]);
+    expect(names.get("bend-ml-autograd")).toEqual(["0.1.1.0"]);
+  }, TIMEOUT);
+});

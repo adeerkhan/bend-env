@@ -139,6 +139,7 @@ async function add(rest: string[]): Promise<void> {
     say("");
     say("  import " + name + "@" + exact.version + "/<entry>.bend as <Name>");
   }
+  saySkew(l);
 }
 
 // remove drops a dependency, locks and syncs.
@@ -175,6 +176,39 @@ async function syncOnly(_rest: string[]): Promise<void> {
     + String(report.reused) + " already there");
 }
 
+/**
+ * skew finds the packages that the closure holds at two versions. Two
+ * versions of one package sit side by side happily, but they are two
+ * different types, and the checker refuses to mix them: a package that
+ * takes a Mat from one cannot take a Mat from the other. The ecosystem
+ * has this skew, so the tool says so.
+ */
+function skew(l: lock.Lock): Map<string, string[]> {
+  const byName = new Map<string, string[]>();
+  for (const pkg of l.package) {
+    const list = byName.get(pkg.name) ?? [];
+    list.push(pkg.version);
+    byName.set(pkg.name, list);
+  }
+  const out = new Map<string, string[]>();
+  for (const [name, versions] of byName) {
+    if (versions.length > 1) out.set(name, versions.sort());
+  }
+  return out;
+}
+
+/** saySkew prints the packages the closure holds at two versions. */
+function saySkew(l: lock.Lock): void {
+  const bad = skew(l);
+  if (bad.size === 0) return;
+  warn("");
+  warn("two versions of the same package are in the lock. They are two");
+  warn("different types, and the checker refuses to mix them:");
+  for (const [name, versions] of [...bad].sort()) {
+    warn("  " + name + ": " + versions.join(", "));
+  }
+}
+
 // list shows what the project resolves to.
 async function list(_rest: string[], asTree: boolean): Promise<void> {
   const p = project();
@@ -188,6 +222,7 @@ async function list(_rest: string[], asTree: boolean): Promise<void> {
     for (const pkg of [...l.package].sort((a, b) => a.name < b.name ? -1 : 1)) {
       say(pkg.name.padEnd(width) + "  " + pkg.version.padEnd(10) + " " + pkg.hash);
     }
+    saySkew(l);
     return;
   }
   const byPinned = new Map<string, lock.Locked>();

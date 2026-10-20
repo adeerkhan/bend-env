@@ -1,0 +1,61 @@
+version = 1
+
+[[package]]
+name = "bend-ml-autograd"
+version = "0.1.1.0"
+hash = "0x0ed882696c6c048c64c66242a999a426"
+source = "hub"
+dependencies = ["bend-ml-nat-lemmas@0.1.0.0", "bend-ml-tensor@0.1.0.0"]
+
+[[package.files]]
+sha = "6ef84dd63aeee1961133c6d77bf2ce28a2a766a0d67e31eb7cf299bd020122a8"
+path = "LICENSE"
+
+[[package.files]]
+sha = "e7e81962862ab2fe4e7608608caedbdcd26f3070618b4ce605fc9d8e8444e8de"
+path = "main.bend"
+
+[[package]]
+name = "bend-ml-nat-lemmas"
+version = "0.1.0.0"
+hash = "0xa7aa06c09e97c6747c12cc64bb5203d9"
+source = "hub"
+dependencies = []
+
+[[package.files]]
+sha = "7b28854c86d77ef5953513f14c020ff5932fdbb1059eab7ba75bbe7fa24ef048"
+path = "LICENSE"
+
+[[package.files]]
+sha = "381de9d155e640477b3afeb4a1498a9bc394a97c32b60c0a4298c5f3bbb3b287"
+path = "main.bend"
+
+[[package]]
+name = "bend-ml-nat-lemmas"
+version = "0.1.1.0"
+hash = "0x2bbe4207657ea8b1158567d930651411"
+source = "hub"
+dependencies = []
+
+[[package.files]]
+sha = "7b28854c86d77ef5953513f14c020ff5932fdbb1059eab7ba75bbe7fa24ef048"
+path = "LICENSE"
+
+[[package.files]]
+sha = "dc70d2ed520030cd346796057c291d6ee90616f4ff1157db180cad65e83f37c1"
+path = "main.bend"
+
+[[package]]
+name = "bend-ml-tensor"
+version = "0.1.0.0"
+hash = "0xf9837737d2c3f58ae1d0c5df42255584"
+source = "hub"
+dependencies = ["bend-ml-nat-lemmas@0.1.0.0"]
+
+[[package.files]]
+sha = "6ef84dd63aeee1961133c6d77bf2ce28a2a766a0d67e31eb7cf299bd020122a8"
+path = "LICENSE"
+
+[[package.files]]
+sha = "0bc8874ffb7ba6d4d33594bedf3a84ad450a5685eed15a48d7d292248de73bda"
+path = "main.bend"
