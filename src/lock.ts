@@ -9,6 +9,13 @@ import * as fs from "node:fs";
 
 export const LOCK_NAME = "bend.lock";
 
+export type LockedFile = {
+  /** the SHA-256 the hub published for the file */
+  sha: string;
+  /** the path of the file inside the package */
+  path: string;
+};
+
 export type Locked = {
   name: string;
   version: string;
@@ -16,6 +23,8 @@ export type Locked = {
   source: "hub";
   /** the pinned dependencies of this package, "name@version" each */
   dependencies: string[];
+  /** the files of the package, so the lock is the whole of it */
+  files: LockedFile[];
 };
 
 export type Lock = {
@@ -60,12 +69,17 @@ export function read(file: string): Lock {
       throw new LockError(file + " has a package without a name, a version or a hash");
     }
     const deps = p["dependencies"];
+    const files = p["files"];
     out.push({
       name,
       version: ver,
       hash,
       source: (p["source"] as "hub") ?? "hub",
       dependencies: Array.isArray(deps) ? deps.filter((d): d is string => typeof d === "string") : [],
+      files: Array.isArray(files)
+        ? files.filter((f): f is Record<string, unknown> => typeof f === "object" && f !== null)
+          .map((f) => ({ sha: String(f["sha"] ?? ""), path: String(f["path"] ?? "") }))
+        : [],
     });
   }
   return { version: LOCK_VERSION, package: out };
@@ -83,6 +97,7 @@ export function write(file: string, lock: Lock): void {
       hash: p.hash,
       source: p.source,
       dependencies: [...p.dependencies].sort(),
+      files: p.files.map((f) => ({ sha: f.sha, path: f.path })),
     })),
   };
   fs.writeFileSync(file, Bun.TOML.stringify(out as never));

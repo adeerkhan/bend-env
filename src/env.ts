@@ -41,8 +41,7 @@ export async function sync(env: string, l: lock.Lock): Promise<SyncReport> {
   for (const pkg of l.package) {
     const dir = path.join(env, pkg.hash);
     fs.mkdirSync(dir, { recursive: true });
-    const files = await hub.manifest(pkg.hash);
-    for (const f of files) {
+    for (const f of pkg.files) {
       const at = path.join(dir, f.path);
       if (fs.existsSync(at)) {
         const got = fs.readFileSync(at, "utf8");
@@ -82,8 +81,7 @@ export async function check(env: string, l: lock.Lock): Promise<string[]> {
       bad.push(pkg.name + "@" + pkg.version + " is not in the environment");
       continue;
     }
-    const files = await hub.manifest(pkg.hash);
-    for (const f of files) {
+    for (const f of pkg.files) {
       const at = path.join(dir, f.path);
       if (!fs.existsSync(at)) {
         bad.push(pkg.hash + "/" + f.path + " is missing");

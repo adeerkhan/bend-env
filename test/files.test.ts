@@ -73,6 +73,7 @@ describe("lock", () => {
           hash: "0x0f6479f09ada7ae614e64e31e8f5a730",
           source: "hub",
           dependencies: [],
+          files: [{ sha: "a".repeat(64), path: "main.bend" }],
         },
         {
           name: "bend-ml-tensor-fork",
@@ -80,6 +81,7 @@ describe("lock", () => {
           hash: "0x5734508f2a6198d9a87a28d4c58bfbae",
           source: "hub",
           dependencies: ["bend-ml-tensor-array@0.1.14.0"],
+          files: [{ sha: "b".repeat(64), path: "main.bend" }],
         },
       ],
     };
@@ -88,6 +90,7 @@ describe("lock", () => {
     expect(back.package).toHaveLength(2);
     const fork = back.package.find((p) => p.name === "bend-ml-tensor-fork")!;
     expect(fork.dependencies).toEqual(["bend-ml-tensor-array@0.1.14.0"]);
+    expect(fork.files).toEqual([{ sha: "b".repeat(64), path: "main.bend" }]);
     expect(lock.find(back, "bend-ml-tensor-fork@0.1.2.0")?.hash)
       .toBe("0x5734508f2a6198d9a87a28d4c58bfbae");
   });

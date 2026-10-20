@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // bendenv: a project and environment manager for Bend 2.
 //
 //   bendenv init [name]            write a manifest

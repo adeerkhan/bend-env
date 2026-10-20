@@ -51,6 +51,7 @@ export async function resolve(roots: Root[]): Promise<lock.Lock> {
       hash: picked.hash,
       source: "hub",
       dependencies: deps.sort(),
+      files: files.map((f) => ({ sha: f.sha, path: f.path })),
     });
     for (const dep of deps) {
       const at = dep.lastIndexOf("@");
