@@ -36,9 +36,9 @@ pub struct Locked {
     /// the files of the package, so the lock is the whole of it
     #[serde(default)]
     pub files: Vec<LockedFile>,
-    /// the names of the types the package declares
+    /// the names of the constructors the package declares
     #[serde(default)]
-    pub types: Vec<String>,
+    pub constructors: Vec<String>,
 }
 
 fn hub_source() -> String {
@@ -103,10 +103,16 @@ impl Lock {
     pub fn collisions(&self) -> Vec<(String, Vec<String>)> {
         let mut by_type: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for pkg in &self.packages {
-            for t in &pkg.types {
+            // a package named by its hash alone has no name to report
+            let name = if pkg.name.is_empty() {
+                pkg.hash.clone()
+            } else {
+                pkg.name.clone()
+            };
+            for t in &pkg.constructors {
                 let list = by_type.entry(t.clone()).or_default();
-                if !list.contains(&pkg.name) {
-                    list.push(pkg.name.clone());
+                if !list.contains(&name) {
+                    list.push(name.clone());
                 }
             }
         }

@@ -30,6 +30,13 @@ pub struct Root {
     pub constraint: String,
 }
 
+/// What the walk is looking for: a package by a name and a constraint, or by
+/// its hash.
+enum Want {
+    Named { name: String, constraint: String },
+    Hash(String),
+}
+
 /// The pages of packages the walk has already read.
 type Pages = Mutex<BTreeMap<String, PkgInfo>>;
 
@@ -37,16 +44,25 @@ type Pages = Mutex<BTreeMap<String, PkgInfo>>;
 pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
     let mut out: BTreeMap<String, Locked> = BTreeMap::new();
     let pages: Pages = Mutex::new(BTreeMap::new());
-    let mut queue: Vec<Root> = roots.to_vec();
-    let mut asked: Vec<(String, String)> = Vec::new();
+    let mut queue: Vec<Want> = roots
+        .iter()
+        .map(|r| Want::Named {
+            name: r.name.clone(),
+            constraint: r.constraint.clone(),
+        })
+        .collect();
+    let mut asked: Vec<String> = Vec::new();
 
     while !queue.is_empty() {
         // one level: every package the last level asked for, and each
         // question asked only once
-        let level: Vec<Root> = queue
+        let level: Vec<Want> = queue
             .drain(..)
             .filter(|r| {
-                let key = (r.name.clone(), r.constraint.clone());
+                let key = match r {
+                    Want::Named { name, constraint } => format!("{name}@{constraint}"),
+                    Want::Hash(hash) => hash.clone(),
+                };
                 if asked.contains(&key) {
                     return false;
                 }
@@ -58,9 +74,25 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
             break;
         }
 
-        // the versions, asked at once
-        let picks: Vec<Result<Picked, String>> =
-            level.par_iter().map(|root| pick(root, &pages)).collect();
+        // the versions, asked at once. A package named by its hash needs
+        // no question: the hash is the identity.
+        let picks: Vec<Result<Picked, String>> = level
+            .par_iter()
+            .map(|root| match root {
+                Want::Named { name, constraint } => pick(
+                    &Root {
+                        name: name.clone(),
+                        constraint: constraint.clone(),
+                    },
+                    &pages,
+                ),
+                Want::Hash(hash) => Ok(Picked {
+                    name: String::new(),
+                    version: String::new(),
+                    hash: hash.clone(),
+                }),
+            })
+            .collect();
         let picks: Vec<Picked> = picks.into_iter().collect::<Result<Vec<_>, _>>()?;
 
         // the files of each, asked at once; the cache has them for good,
@@ -77,12 +109,18 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
         let deps_of: Vec<Vec<String>> = deps_of.into_iter().collect::<Result<Vec<_>, _>>()?;
 
         // the types each declares, for the same reason
-        let types_of: Vec<Result<Vec<String>, String>> =
-            picks.par_iter().map(|p| cache::types(&p.hash)).collect();
+        let types_of: Vec<Result<Vec<String>, String>> = picks
+            .par_iter()
+            .map(|p| cache::constructors(&p.hash))
+            .collect();
         let types_of: Vec<Vec<String>> = types_of.into_iter().collect::<Result<Vec<_>, _>>()?;
 
         for (i, picked) in picks.iter().enumerate() {
-            let pinned = format!("{}@{}", picked.name, picked.version);
+            let pinned = if picked.name.is_empty() {
+                picked.hash.clone()
+            } else {
+                format!("{}@{}", picked.name, picked.version)
+            };
             if out.contains_key(&pinned) {
                 continue;
             }
@@ -103,12 +141,14 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
                             path: f.path.clone(),
                         })
                         .collect(),
-                    types: types_of[i].clone(),
+                    constructors: types_of[i].clone(),
                 },
             );
             for dep in deps {
-                if let Some(p) = split_pinned(&dep) {
-                    queue.push(Root {
+                if dep.starts_with("0x") {
+                    queue.push(Want::Hash(dep.clone()));
+                } else if let Some(p) = split_pinned(&dep) {
+                    queue.push(Want::Named {
                         name: p.0.to_string(),
                         constraint: p.1.to_string(),
                     });

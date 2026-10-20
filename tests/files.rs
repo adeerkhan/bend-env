@@ -69,7 +69,7 @@ fn a_lock_round_trips() {
                 sha: "a".repeat(64),
                 path: "main.bend".to_string(),
             }],
-            types: vec!["Mat".to_string()],
+            constructors: vec!["Mat".to_string()],
         }],
     };
     l.write(&file).expect("write");
@@ -105,7 +105,7 @@ fn an_environment_is_verified_against_its_lock() {
                 sha: bendenv::hub::sha256("hello\n"),
                 path: "main.bend".to_string(),
             }],
-            types: vec!["Mat".to_string()],
+            constructors: vec!["Mat".to_string()],
         }],
     };
     // nothing installed yet

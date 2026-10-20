@@ -180,8 +180,19 @@ different types, and a program that mixes them does not compile:
 
 The ecosystem's flat tensor library and its list-based one are such a
 pair, and so is the flat one and the autodiff that is written against
-the other. The lock carries the type names of every package, so the
-report needs no network.
+the other. The lock carries the constructor names of every package, so
+the report needs no network.
+
+**Base is in the report too.** Base is not on the hub and it moves, so a
+constructor it gains can break a package that was published before it.
+`ezx@1.5.0.0`, the ecosystem's other package manager, does not compile
+against bend 2.0.37: `emerging-ezhttp` declares `Body.Text` and Base's
+`Event` declares `Event.Text`, and a program that imports both has two
+`Text` constructors in scope. `bendenv lock` says so before you try:
+
+```
+  Text: 0xf1c957a470368870a6d1d62a8c0cbe32, bend2/base.bend, ezx
+```
 
 ## The skew
 

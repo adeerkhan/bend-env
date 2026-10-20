@@ -4,16 +4,54 @@
 //! first line that is not one, so this does the same: a file's
 //! dependencies are the pinned hub packages it names.
 
-/// A pinned hub package: a name and a four-number version.
+/// A pinned hub package: a name and a four-number version, or a hash.
+///
+/// A source may name its dependency either way. `import pkg@1.0.0.0/x.bend`
+/// names a version, and `import 0xabc.../x.bend` names the bytes: the hash
+/// is the identity of a package, so a hash is the most reproducible form of
+/// the two.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pinned {
+    /// the name, or "" when the import names a hash
     pub name: String,
+    /// the version, or "" when the import names a hash
     pub version: String,
+    /// the hash, or "" when the import names a version
+    pub hash: String,
+}
+
+impl Pinned {
+    /// by_name is a dependency named by a name and a version.
+    pub fn by_name(name: &str, version: &str) -> Pinned {
+        Pinned {
+            name: name.to_string(),
+            version: version.to_string(),
+            hash: String::new(),
+        }
+    }
+
+    /// by_hash is a dependency named by its hash.
+    pub fn by_hash(hash: &str) -> Pinned {
+        Pinned {
+            name: String::new(),
+            version: String::new(),
+            hash: hash.to_string(),
+        }
+    }
+
+    /// is_hash says whether the dependency is named by its hash.
+    pub fn is_hash(&self) -> bool {
+        !self.hash.is_empty()
+    }
 }
 
 impl std::fmt::Display for Pinned {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.name, self.version)
+        if self.is_hash() {
+            write!(f, "{}", self.hash)
+        } else {
+            write!(f, "{}@{}", self.name, self.version)
+        }
     }
 }
 
@@ -38,6 +76,21 @@ pub fn imports(text: &str) -> Vec<Pinned> {
             .chars()
             .take_while(|c| !c.is_whitespace() && *c != '#')
             .collect();
+        // a dependency named by its hash: `import 0xabc.../file.bend`
+        if let Some(hash) = path.strip_prefix("0x") {
+            let hash = match hash.find('/') {
+                Some(slash) => &hash[..slash],
+                None => hash,
+            };
+            if !crate::hub::valid_hash(&format!("0x{hash}")) {
+                continue;
+            }
+            let pinned = Pinned::by_hash(&format!("0x{hash}"));
+            if !out.contains(&pinned) {
+                out.push(pinned);
+            }
+            continue;
+        }
         let (name, version) = match split_pinned(&path) {
             Some(got) => got,
             None => continue,
@@ -48,10 +101,7 @@ pub fn imports(text: &str) -> Vec<Pinned> {
         if crate::version::Version::parse(version).is_none() {
             continue;
         }
-        let pinned = Pinned {
-            name: name.to_string(),
-            version: version.to_string(),
-        };
+        let pinned = Pinned::by_name(name, version);
         if !out.contains(&pinned) {
             out.push(pinned);
         }
@@ -133,6 +183,15 @@ mod tests {
     fn reads_an_import_with_a_trailing_comment() {
         let src = "import bend-ml-tensor-array@0.1.14.0/main.bend as TA  # the tensors\n";
         assert_eq!(imports(src).len(), 1);
+    }
+
+    #[test]
+    fn reads_a_dependency_named_by_its_hash() {
+        let src = "import 0xf1c957a470368870a6d1d62a8c0cbe32/main.bend as Http\n";
+        let got = imports(src);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].is_hash());
+        assert_eq!(got[0].to_string(), "0xf1c957a470368870a6d1d62a8c0cbe32");
     }
 
     #[test]

@@ -519,15 +519,29 @@ fn read_lock_lenient(root: &Path) -> Lock {
 /// both declare. A Bend type belongs to the package that declares it,
 /// so two packages that declare `Mat` are two different `Mat`, and a
 /// program that mixes them does not compile.
+///
+/// Base is in the report too: it is not on the hub and it moves, so a
+/// constructor it gains can break a package that was published before.
 fn say_collisions(l: &Lock) {
-    let bad = l.collisions();
+    let mut bad = l.collisions();
+    let base = cache::base_constructors();
+    if !base.is_empty() {
+        for (name, packages) in bad.iter_mut() {
+            if base.contains(name) {
+                packages.push("bend2/base.bend".to_string());
+                packages.sort();
+            }
+        }
+    }
     if bad.is_empty() {
         return;
     }
     eprintln!();
-    eprintln!("two packages of the closure declare the same type. A Bend type");
-    eprintln!("belongs to the package that declares it, so they are two");
-    eprintln!("different types, and a program that mixes them does not compile:");
+    eprintln!("two packages of the closure declare a type with the same name.");
+    eprintln!("A Bend type belongs to the package that declares it, so they are");
+    eprintln!("two different types: a program that passes one where the other");
+    eprintln!("is expected does not compile. The names that matter are the ones");
+    eprintln!("both stacks use; the rest only collide if they are mixed:");
     for (name, packages) in bad {
         eprintln!("  {name}: {}", packages.join(", "));
     }

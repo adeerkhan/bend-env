@@ -1,8 +1,0 @@
-[project]
-name = "bend-ml-demo"
-version = "0.1.0"
-
-[dependencies]
-bend-ml-autograd = "0.1.1.0"
-bend-ml-nat-lemmas = "0.1.1.0"
-bend-ml-tensor = "0.1.0.0"

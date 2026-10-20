@@ -178,7 +178,7 @@ pub fn manifest(hash: &str) -> Result<Vec<hub::HubFile>, String> {
 /// deps returns the packages a package's sources import. A hash names
 /// the same sources for ever, so this is cached for good.
 pub fn deps(hash: &str) -> Result<Vec<String>, String> {
-    let at = cache_dir().join("deps").join(hash);
+    let at = cache_dir().join("deps2").join(hash);
     if let Ok(text) = fs::read_to_string(&at) {
         let out: Vec<String> = text
             .lines()
@@ -208,16 +208,22 @@ pub fn deps(hash: &str) -> Result<Vec<String>, String> {
         }
     }
     out.sort();
-    let dir = cache_dir().join("deps");
+    let dir = cache_dir().join("deps2");
     let _ = fs::create_dir_all(&dir);
     let _ = fs::write(dir.join(hash), out.join("\n"));
     Ok(out)
 }
 
-/// types returns the names of the types a package declares. A hash
-/// names the same sources for ever, so this is cached for good.
-pub fn types(hash: &str) -> Result<Vec<String>, String> {
-    let at = cache_dir().join("types").join(hash);
+/// constructors returns the names of the constructors a package
+/// declares. A hash names the same sources for ever, so this is cached
+/// for good.
+///
+/// The constructors, not the types: a Bend constructor is a name in the
+/// namespace of its package, so `Text` in one package and `Text` in
+/// another are two names that cannot both be in scope. That is the
+/// clash that breaks a program, not the type names.
+pub fn constructors(hash: &str) -> Result<Vec<String>, String> {
+    let at = cache_dir().join("ctors2").join(hash);
     if let Ok(text) = fs::read_to_string(&at) {
         let out: Vec<String> = text
             .lines()
@@ -237,23 +243,107 @@ pub fn types(hash: &str) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     for text in sources.into_iter().collect::<Result<Vec<_>, _>>()? {
         for line in text.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("type ") {
-                let name: String = rest
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
-                    .collect();
-                if !name.is_empty() && !out.contains(&name) {
-                    out.push(name);
-                }
+            // a constructor is written like this, indented under its type:
+            //   Text{text: String}
+            let Some(rest) = line.strip_prefix("  ") else {
+                continue;
+            };
+            if line.starts_with("   ") || rest.starts_with(' ') {
+                continue;
+            }
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            if !name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                continue;
+            }
+            if !rest[name.len()..].starts_with('{') {
+                continue;
+            }
+            if !out.contains(&name) {
+                out.push(name);
             }
         }
     }
     out.sort();
-    let dir = cache_dir().join("types");
+    let dir = cache_dir().join("ctors2");
     let _ = fs::create_dir_all(&dir);
     let _ = fs::write(dir.join(hash), out.join("\n"));
     Ok(out)
+}
+
+/// base_constructors returns the names of the constructors Base declares.
+///
+/// Base is not on the hub: it comes with the compiler, and it moves. A
+/// constructor Base gains can collide with one a published package
+/// declares, and then every program that imports both refuses to compile.
+/// The names are read from the installed Base, when it can be found.
+pub fn base_constructors() -> Vec<String> {
+    let Some(text) = base_bend() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        // a constructor is written like this, indented under its type:
+        //   Text{text: String}
+        let Some(rest) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if line.starts_with("   ") || rest.starts_with(' ') {
+            continue;
+        }
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        if !name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            continue;
+        }
+        if !rest[name.len()..].starts_with('{') {
+            continue;
+        }
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// base_bend finds the Base source that comes with the compiler.
+fn base_bend() -> Option<String> {
+    let mut ats: Vec<PathBuf> = Vec::new();
+    if let Ok(at) = std::env::var("BEND_DIR") {
+        ats.push(PathBuf::from(at).join("base.bend"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        ats.push(
+            PathBuf::from(&home)
+                .join(".bend")
+                .join("bend2")
+                .join("base.bend"),
+        );
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut up = exe.parent().map(|p| p.to_path_buf());
+        while let Some(at) = up {
+            ats.push(at.join("bend2").join("base.bend"));
+            up = at.parent().map(|p| p.to_path_buf());
+        }
+    }
+    for at in ats {
+        if let Ok(text) = fs::read_to_string(&at) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 /// clean empties the store.
@@ -268,7 +358,15 @@ pub fn clean() -> Result<usize, String> {
         let _ = fs::remove_file(entry.path());
         n += 1;
     }
-    for sub in ["pages", "manifests", "deps", "types"] {
+    for sub in [
+        "pages",
+        "manifests",
+        "deps",
+        "types",
+        "deps2",
+        "types2",
+        "ctors2",
+    ] {
         let dir = cache_dir().join(sub);
         if !dir.is_dir() {
             continue;
@@ -286,7 +384,15 @@ pub fn clean() -> Result<usize, String> {
 /// size is how many bytes the store holds.
 pub fn size() -> u64 {
     let mut n = 0;
-    for sub in ["files", "pages", "manifests", "deps", "types"] {
+    for sub in [
+        "files",
+        "pages",
+        "manifests",
+        "deps",
+        "types",
+        "deps2",
+        "types2",
+    ] {
         let dir = cache_dir().join(sub);
         if !dir.is_dir() {
             continue;
