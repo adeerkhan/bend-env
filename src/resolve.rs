@@ -83,6 +83,13 @@ pub fn resolve_with(roots: &[Root], locals: &[Local]) -> Result<Lock, String> {
                 path: path.clone(),
             })
             .collect();
+        // the files of a member that lives here have never been through
+        // the hub, so the store has to learn them: the environment is
+        // made of links into that store
+        for (path, text) in &files {
+            let sha = crate::hub::sha256(text);
+            crate::cache::put(&sha, text).map_err(|e| format!("{}: {e}", path))?;
+        }
         let pinned = format!("{}@{}", local.name, local.version);
         if out.contains_key(&pinned) {
             continue;
@@ -223,8 +230,57 @@ pub fn resolve_with(roots: &[Root], locals: &[Local]) -> Result<Lock, String> {
 
     Ok(Lock {
         version: LOCK_VERSION,
-        packages: out.into_values().collect(),
+        packages: prune(out, roots, locals),
     })
+}
+
+/// prune keeps only the packages the roots reach. A lock that holds a
+/// package nothing depends on is a lock that has drifted.
+fn prune(out: BTreeMap<String, Locked>, roots: &[Root], locals: &[Local]) -> Vec<Locked> {
+    // the roots: the packages the manifest names, and the members
+    let mut start: Vec<String> = Vec::new();
+    for local in locals {
+        start.push(format!("{}@{}", local.name, local.version));
+    }
+    for root in roots {
+        let want = Constraint::parse(&root.constraint).ok();
+        for (pin, pkg) in &out {
+            if pkg.name != root.name {
+                continue;
+            }
+            let fits = match (&want, Version::parse(&pkg.version)) {
+                (Some(w), Some(v)) => w.matches(&v),
+                _ => true,
+            };
+            if fits {
+                start.push(pin.clone());
+                break;
+            }
+        }
+    }
+
+    // and everything they reach
+    let mut keep: Vec<String> = Vec::new();
+    let mut stack = start;
+    while let Some(pin) = stack.pop() {
+        if keep.contains(&pin) {
+            continue;
+        }
+        keep.push(pin.clone());
+        if let Some(pkg) = out.get(&pin) {
+            for dep in &pkg.dependencies {
+                stack.push(dep.clone());
+            }
+        }
+    }
+
+    let mut packages: Vec<Locked> = out
+        .into_iter()
+        .filter(|(pin, _)| keep.contains(pin))
+        .map(|(_, pkg)| pkg)
+        .collect();
+    packages.sort_by(|a, b| a.name.cmp(&b.name).then(a.version.cmp(&b.version)));
+    packages
 }
 
 struct Picked {
