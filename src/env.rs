@@ -52,19 +52,33 @@ pub fn sync(env: &Path, l: &Lock) -> Result<SyncReport, String> {
         let dir = env.join(&pkg.hash);
         fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
 
-        // fetch the files that are not in the cache yet, in parallel
+        // a lock that came from another tool's ledger carries no file list:
+        // the hub knows it, and a hash names the same files for ever
+        let files: Vec<crate::lock::LockedFile> = if pkg.files.is_empty() {
+            hub::manifest(&pkg.hash)?
+                .into_iter()
+                .map(|f| crate::lock::LockedFile {
+                    sha: f.sha,
+                    path: f.path,
+                })
+                .collect()
+        } else {
+            pkg.files.clone()
+        };
+
+        // the files that are not in the cache yet, fetched at once
         let missing: Vec<&crate::lock::LockedFile> =
-            pkg.files.iter().filter(|f| !cache::has(&f.sha)).collect();
-        let results: Vec<Result<(), String>> = missing
+            files.iter().filter(|f| !cache::has(&f.sha)).collect();
+        let fetched: Vec<Result<(), String>> = missing
             .par_iter()
             .map(|f| cache::fetch(&pkg.hash, &f.path, &f.sha))
             .collect();
-        for r in results {
+        for r in fetched {
             r?;
         }
         report.fetched += missing.len();
 
-        for f in &pkg.files {
+        for f in &files {
             let at = dir.join(&f.path);
             if let Some(parent) = at.parent() {
                 fs::create_dir_all(parent)

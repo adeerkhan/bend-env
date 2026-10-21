@@ -167,3 +167,11 @@ pub fn sha256(data: &str) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+
+/// sha256_bytes is the digest of a string, as the bytes it is: the proof
+/// of work reads the digest's bits, not its hex.
+pub fn sha256_bytes(data: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data.as_bytes());
+    hasher.finalize().into()
+}

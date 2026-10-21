@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bendenv::{cache, env, hub, lock, manifest, project, publish, resolve, version};
+use bendenv::{cache, env, hub, ledger, lock, manifest, project, publish, resolve, version};
 use lock::{LOCK_VERSION, Lock};
 use manifest::Manifest;
 use project::Project;
@@ -30,6 +30,9 @@ bendenv: a project and environment manager for Bend 2
   bendenv check                   verify the environment against the lock
   bendenv run -- <cmd>...         run a command with the environment
   bendenv publish <name>@<version> publish a package to the hub
+  bendenv publish-dir <dir>       publish a source tree to the hub
+  bendenv adopt [ez.toml]         read ez's ledger as this project's lock
+  bendenv ledger                  write this project's lock as ez's ledger
   bendenv hash <file.bend>         the hash a package would publish under
   bendenv cache clean             empty the global cache
   bendenv cache dir               where the global cache lives
@@ -61,6 +64,9 @@ fn dispatch(argv: &[String]) -> Result<(), String> {
         "check" => check(rest),
         "run" => run(rest),
         "publish" => publish::publish(rest),
+        "publish-dir" => publish::publish_dir(rest),
+        "adopt" => adopt(rest),
+        "ledger" => ledger_cmd(rest),
         "hash" => publish::hash_cmd(rest),
         "cache" => cache_cmd(rest),
         "purge" => purge(rest),
@@ -438,9 +444,9 @@ fn outdated(_args: &[String]) -> Result<(), String> {
 }
 
 fn check(_args: &[String]) -> Result<(), String> {
-    let p = open()?;
-    let l = Lock::read(&lock_file(&p.root))?;
-    let bad = env::check(&env::env_path(&p.root), &l);
+    let (root, l) = lock_here()?;
+    let _ = &root;
+    let bad = env::check(&env::env_path(&root), &l);
     if bad.is_empty() {
         println!(
             "the environment matches the lock: {} packages",
@@ -477,6 +483,62 @@ fn run(args: &[String]) -> Result<(), String> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// adopt reads ez's ledger as this project's lock: the same content
+/// hashes, and a project ez set up can be fetched, checked and synced by
+/// bend-env.
+fn adopt(args: &[String]) -> Result<(), String> {
+    let file = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "ez.toml".to_string());
+    let at = std::path::Path::new(&file);
+    let root = at
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let text = std::fs::read_to_string(at).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let led = ledger::read(&text)?;
+    let mut l = ledger::to_lock(&led);
+    // a ledger names its dependencies by hash and carries no file list: the
+    // hub knows the files, and a hash names the same files for ever
+    for pkg in l.packages.iter_mut() {
+        if !pkg.files.is_empty() {
+            continue;
+        }
+        let files = hub::manifest(&pkg.hash)?;
+        pkg.files = files
+            .into_iter()
+            .map(|f| lock::LockedFile {
+                sha: f.sha,
+                path: f.path,
+            })
+            .collect();
+    }
+    l.write(&lock_file(&root))?;
+    println!("adopted {} dependencies from {file}", led.deps.len());
+    let report = env::sync(&env::env_path(&root), &l)?;
+    println!(
+        "synced {} packages, {} files fetched, {} linked",
+        report.packages.len(),
+        report.fetched,
+        report.linked
+    );
+    Ok(())
+}
+
+/// ledger writes this project's lock as ez's ledger, so ez can read it
+/// back.
+fn ledger_cmd(_args: &[String]) -> Result<(), String> {
+    let p = open()?;
+    let l = Lock::read(&lock_file(&p.root))?;
+    let text = ledger::write(&l, &p.manifest.project.name, "");
+    let at = p.root.join("ez.toml");
+    std::fs::write(&at, text).map_err(|e| format!("cannot write {at:?}: {e}"))?;
+    println!("wrote {}", at.display());
+    Ok(())
+}
+
 fn cache_cmd(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("clean") => {
@@ -506,6 +568,28 @@ fn purge(_args: &[String]) -> Result<(), String> {
     env::purge(&e)?;
     println!("removed {}", e.display());
     Ok(())
+}
+
+/// lock_here finds the lockfile of the project the working directory is
+/// in, with or without a manifest: a project that came from another
+/// tool's ledger has a lock and no manifest.
+fn lock_here() -> Result<(PathBuf, Lock), String> {
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("cannot read the working directory: {e}"))?;
+    if let Ok(p) = open() {
+        let root = p.root.clone();
+        let l = Lock::read(&lock_file(&root))?;
+        return Ok((root, l));
+    }
+    let root = match manifest::find(&cwd) {
+        Some(file) => file
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| cwd.clone()),
+        None => cwd.clone(),
+    };
+    let l = Lock::read(&lock_file(&root))?;
+    Ok((root, l))
 }
 
 /// read_lock_lenient reads the lockfile, and treats a missing one as an

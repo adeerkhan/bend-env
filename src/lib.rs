@@ -8,6 +8,7 @@
 pub mod cache;
 pub mod env;
 pub mod hub;
+pub mod ledger;
 pub mod lock;
 pub mod manifest;
 pub mod project;
