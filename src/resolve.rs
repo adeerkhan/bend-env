@@ -15,6 +15,7 @@
 //! dependencies is two seconds and not four.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rayon::prelude::*;
@@ -40,8 +41,25 @@ enum Want {
 /// The pages of packages the walk has already read.
 type Pages = Mutex<BTreeMap<String, PkgInfo>>;
 
+/// A member of the workspace that lives on this machine: its name, its
+/// version, and the directory it is in. Its content hash is the hash the
+/// hub would give it, so a member that another member imports by name
+/// resolves to the local build.
+#[derive(Clone, Debug)]
+pub struct Local {
+    pub name: String,
+    pub version: String,
+    pub dir: PathBuf,
+}
+
 /// resolve walks the dependencies of a project and returns the closure.
 pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
+    resolve_with(roots, &[])
+}
+
+/// resolve_with walks the dependencies of a project, the local members
+/// among them, and returns the closure.
+pub fn resolve_with(roots: &[Root], locals: &[Local]) -> Result<Lock, String> {
     let mut out: BTreeMap<String, Locked> = BTreeMap::new();
     let pages: Pages = Mutex::new(BTreeMap::new());
     let mut queue: Vec<Want> = roots
@@ -52,6 +70,52 @@ pub fn resolve(roots: &[Root]) -> Result<Lock, String> {
         })
         .collect();
     let mut asked: Vec<String> = Vec::new();
+
+    // the local members first: a member that another member imports by
+    // name must be in the closure under its own content hash
+    for local in locals {
+        let (files, entry) = crate::publish::pkg_files(&local.dir.join("main.bend"))?;
+        let hash = crate::publish::hash_of(&files);
+        let locked_files: Vec<LockedFile> = files
+            .iter()
+            .map(|(path, text)| LockedFile {
+                sha: crate::hub::sha256(text),
+                path: path.clone(),
+            })
+            .collect();
+        let pinned = format!("{}@{}", local.name, local.version);
+        if out.contains_key(&pinned) {
+            continue;
+        }
+        out.insert(
+            pinned.clone(),
+            Locked {
+                name: local.name.clone(),
+                version: local.version.clone(),
+                hash: hash.clone(),
+                source: "local".to_string(),
+                dependencies: Vec::new(),
+                files: locked_files,
+                constructors: Vec::new(),
+            },
+        );
+        let _ = entry;
+
+        // and the imports its own sources carry
+        for text in files.values() {
+            for p in crate::scan::imports(text) {
+                let dep = p.to_string();
+                if dep.starts_with("0x") {
+                    queue.push(Want::Hash(dep));
+                } else if let Some((n, v)) = split_pinned(&dep) {
+                    queue.push(Want::Named {
+                        name: n.to_string(),
+                        constraint: v.to_string(),
+                    });
+                }
+            }
+        }
+    }
 
     while !queue.is_empty() {
         // one level: every package the last level asked for, and each

@@ -661,17 +661,29 @@ fn say_workspace_skew(p: &Project) {
 }
 
 /// resolve_project resolves the dependencies of every package of the
-/// project: the workspace's, or the lone package's.
+/// project: the workspace's, or the lone package's. The members that
+/// live in this checkout are resolved too, under their own content
+/// hash, so a member that another member imports by name resolves to
+/// the local build.
 fn resolve_project(p: &Project) -> Result<Lock, String> {
     let roots: Vec<Root> = p
         .roots()
         .into_iter()
         .map(|(name, constraint)| Root { name, constraint })
         .collect();
-    if roots.is_empty() {
+    let locals: Vec<resolve::Local> = p
+        .members
+        .iter()
+        .map(|m| resolve::Local {
+            name: m.name().to_string(),
+            version: m.version.clone(),
+            dir: m.dir.clone(),
+        })
+        .collect();
+    if roots.is_empty() && locals.is_empty() {
         return Ok(Lock::empty());
     }
-    resolve::resolve(&roots)
+    resolve::resolve_with(&roots, &locals)
 }
 
 /// the lock version this tool writes, for the tests

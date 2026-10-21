@@ -20,12 +20,19 @@ pub struct Member {
     pub dir: PathBuf,
     pub file: PathBuf,
     pub manifest: Manifest,
+    /// the package's version, which is its name on the hub
+    pub version: String,
 }
 
 impl Member {
     /// name is the package's name.
     pub fn name(&self) -> &str {
         &self.manifest.project.name
+    }
+
+    /// pinned is how the member is named: a name and a version.
+    pub fn pinned(&self) -> String {
+        format!("{}@{}", self.name(), self.version)
     }
 }
 
@@ -204,10 +211,12 @@ pub fn open(dir: &Path) -> Result<Project, String> {
                     ));
                 }
                 let man = Manifest::read(&mfile)?;
+                let version = man.project.version.clone().unwrap_or_default();
                 members.push(Member {
                     dir,
                     file: mfile,
                     manifest: man,
+                    version,
                 });
             }
         }
