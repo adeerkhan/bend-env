@@ -71,14 +71,16 @@ pub fn pkg_files(entry: &Path) -> Result<(Files, String), String> {
         found.push(real.clone());
 
         // a LICENSE beside the file comes with it
-        if let Some(license) = real.parent().map(|p| p.join("LICENSE")) {
-            if license.is_file() {
-                let real = fs::canonicalize(&license)
-                    .map_err(|e| format!("cannot read {}: {e}", license.display()))?;
-                if !seen.contains(&real) {
-                    seen.push(real.clone());
-                    found.push(real);
-                }
+        if let Some(license) = real
+            .parent()
+            .map(|p| p.join("LICENSE"))
+            .filter(|l| l.is_file())
+        {
+            let real = fs::canonicalize(&license)
+                .map_err(|e| format!("cannot read {}: {e}", license.display()))?;
+            if !seen.contains(&real) {
+                seen.push(real.clone());
+                found.push(real);
             }
         }
 
